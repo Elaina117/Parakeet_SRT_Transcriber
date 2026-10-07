@@ -1,0 +1,8 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+python-multipart>=0.0.9
+numpy>=1.26
+imageio-ffmpeg>=0.6
+onnx-asr[hub]==0.11.0
+huggingface_hub>=0.30.2,<1
+onnx>=1.16,<2
