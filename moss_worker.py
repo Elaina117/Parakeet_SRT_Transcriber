@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import math
 import os
 import shutil
@@ -55,6 +56,69 @@ def save_wav(path: Path, samples: np.ndarray) -> None:
         wav.setsampwidth(2)
         wav.setframerate(SAMPLE_RATE)
         wav.writeframes(pcm.tobytes())
+
+
+def build_moss_prompt(language: str) -> str:
+    prompt = (
+        '请只转写音频中清晰可辨的人类说话内容，不要描述音乐、伴奏、背景音、'
+        '音效或环境声，不要猜测、补全或重复歌词。如果没有人类说话，'
+        '请只返回空内容，不要输出说明。每一段需以起始时间戳和说话人编号'
+        '（[S01]、[S02]、[S03]…）开头，正文只写对应的说话内容，'
+        '并在段末标注结束时间戳。'
+    )
+    if language != 'auto':
+        prompt += f'音频语言是{LANGUAGES[language]}，请使用该语言转写。'
+    return prompt
+
+
+def generate_moss_transcription(model, processor, messages, *, max_new_tokens: int,
+                                do_sample: bool, device, dtype,
+                                token_callback=None) -> dict:
+    """Generate with AMP only in the model, never in audio feature extraction."""
+    import torch
+    from moss_transcribe_diarize.inference_utils import ProgressStreamer, prepare_inputs
+
+    # The upstream helper wraps prepare_inputs in autocast. Its CUDA log-mel
+    # feature extraction can then turn silent/padded frames into -inf, which
+    # sends MOSS into a repeated audio-description output instead of ASR.
+    inputs = prepare_inputs(
+        processor, messages, max_length=131072, device=device).to(device)
+    if not torch.isfinite(inputs['input_features']).all():
+        raise RuntimeError('MOSS音声特徴量にNaN/Infが含まれています。')
+    prompt_len = int(inputs['attention_mask'][0].sum().item())
+    generation_config = copy.deepcopy(model.generation_config)
+    generation_config.max_new_tokens = max_new_tokens
+    generation_config.do_sample = do_sample
+    streamer = ProgressStreamer(token_callback) if token_callback is not None else None
+    generate_kwargs = {
+        'input_ids': inputs['input_ids'],
+        'attention_mask': inputs['attention_mask'],
+        'input_features': inputs['input_features'],
+        'audio_feature_lengths': inputs['audio_feature_lengths'],
+        'audio_chunk_mapping': inputs['audio_chunk_mapping'],
+        'generation_config': generation_config,
+    }
+    if streamer is not None:
+        generate_kwargs['streamer'] = streamer
+
+    amp = (torch.amp.autocast('cuda', dtype=dtype)
+           if device.type == 'cuda' and dtype in (torch.float16, torch.bfloat16)
+           else torch.no_grad())
+    with torch.inference_mode(), amp:
+        try:
+            outputs = model.generate(**generate_kwargs)
+        except TypeError as exc:
+            if streamer is None or 'streamer' not in str(exc):
+                raise
+            generate_kwargs.pop('streamer', None)
+            outputs = model.generate(**generate_kwargs)
+
+    generated_ids = outputs[0][prompt_len:]
+    return {
+        'text': processor.tokenizer.decode(generated_ids, skip_special_tokens=True).strip(),
+        'prompt_len': prompt_len,
+        'generated_tokens': int(generated_ids.numel()),
+    }
 
 
 def build_speech_regions(intervals: list[tuple[float, float]], start: float,
@@ -207,7 +271,7 @@ def main() -> int:
         import torch
         from transformers import AutoModelForCausalLM, AutoProcessor
         from moss_transcribe_diarize import parse_transcript
-        from moss_transcribe_diarize.inference_utils import build_transcription_messages, generate_transcription
+        from moss_transcribe_diarize.inference_utils import build_transcription_messages
 
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         dtype = torch.float16 if device.type == 'cuda' else torch.float32
@@ -256,13 +320,7 @@ def main() -> int:
         first_chunk = start_sample // block_samples
         if first_chunk * block_samples != start_sample:
             raise RuntimeError('MOSSの再開位置が処理区間の境界ではありません。')
-        prompt = (
-            '请将音频转写为文本，每一段需以起始时间戳和说话人编号'
-            '（[S01]、[S02]、[S03]…）开头，正文为对应的语音内容，'
-            '并在段末标注结束时间戳，以清晰标明该段语音范围。'
-        )
-        if language != 'auto':
-            prompt += f'音频语言是{LANGUAGES[language]}，请使用该语言转写。'
+        prompt = build_moss_prompt(language)
         all_segments = []
         speech_intervals = None
         presence_only = False
@@ -308,7 +366,7 @@ def main() -> int:
                              count=count, retry=depth)
                         last_reported = count
 
-                result = generate_transcription(
+                result = generate_moss_transcription(
                     model,
                     processor,
                     messages,
