@@ -473,30 +473,26 @@ def run_moss_transcription(audio_path, duration, job, jid, checkpoint, resume_fr
     log_path = TMP / f'{jid}.moss.log'
     vad_path = TMP / f'{jid}.moss-vad.json'
     vad_argument = None
-    presence_only = not use_vad
-    try:
-        if presence_only:
-            job.update(progress=32, message=(
-                f'{int(chunk_minutes)}分区間を保つため、発話の有無だけを検出中…'))
-        intervals = detect_voice_intervals(
-            audio_path, duration, job, presence_only=presence_only)
-        vad_path.write_text(json.dumps({
-            'speech_intervals': intervals,
-            'presence_only': presence_only,
-        }), encoding='utf-8')
-        interval_seconds = int(chunk_minutes) * 60 if presence_only else MOSS_CHUNK_SECONDS
-        speech_blocks = len({int(x['start'] // interval_seconds) for x in intervals})
+    if use_vad:
+        try:
+            intervals = detect_voice_intervals(audio_path, duration, job)
+            vad_path.write_text(json.dumps({
+                'speech_intervals': intervals,
+                'presence_only': False,
+            }), encoding='utf-8')
+            speech_blocks = len({
+                int(x['start'] // MOSS_CHUNK_SECONDS) for x in intervals
+            })
+            job.update(progress=34, message=(
+                f'MOSS-Transcribe-Diarize の準備完了… 発話を含む区間 {speech_blocks}件を処理します'))
+            vad_argument = str(vad_path)
+        except Exception as exc:
+            vad_path.unlink(missing_ok=True)
+            print('Silero VAD unavailable; MOSS will process all audio chunks:', repr(exc))
+            job.update(progress=34, message='MOSS-Transcribe-Diarize の準備完了…')
+    else:
         job.update(progress=34, message=(
-            f'MOSSの区間は分割せず処理します… 発話あり {speech_blocks}区間'
-            if presence_only else
-            f'MOSS-Transcribe-Diarize の準備完了… 発話を含む区間 {speech_blocks}件を処理します'))
-        vad_argument = str(vad_path)
-    except Exception as exc:
-        vad_path.unlink(missing_ok=True)
-        print('Silero VAD unavailable; MOSS will process all audio chunks:', repr(exc))
-        job.update(progress=34, message=(
-            '発話検出を利用できないため、指定区間をそのまま文字起こしします…'
-            if presence_only else 'MOSS-Transcribe-Diarize の準備完了…'))
+            f'VADを使わず、音声を{int(chunk_minutes)}分ごとに処理します…'))
     chunk_seconds = MOSS_CHUNK_SECONDS if use_vad else int(chunk_minutes) * 60
     sample_rate = 16000
     total_samples = audio_path.stat().st_size // 4
