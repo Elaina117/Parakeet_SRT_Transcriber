@@ -265,8 +265,10 @@ def main() -> int:
             prompt += f'音频语言是{LANGUAGES[language]}，请使用该语言转写。'
         all_segments = []
         speech_intervals = None
+        presence_only = False
         if vad_path is not None:
             vad_data = json.loads(vad_path.read_text(encoding='utf-8'))
+            presence_only = bool(vad_data.get('presence_only', False))
             speech_intervals = [
                 (max(0.0, float(item['start'])), max(0.0, float(item['end'])))
                 for item in vad_data.get('speech_intervals', [])
@@ -280,7 +282,7 @@ def main() -> int:
                 return []
 
             duration = samples.size / SAMPLE_RATE
-            if speech_intervals is not None and not any(
+            if speech_intervals is not None and not presence_only and not any(
                     start < offset + duration + 0.5 and end > offset - 0.5
                     for start, end in speech_intervals):
                 return []
@@ -386,7 +388,7 @@ def main() -> int:
                     for start, end in speech_intervals
                 )
                 if has_speech:
-                    if speech_intervals is None:
+                    if speech_intervals is None or presence_only:
                         chunk_segments = transcribe_audio(
                             samples, offset, chunk_index, total_chunks)
                     else:
