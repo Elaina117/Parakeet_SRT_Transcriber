@@ -29,7 +29,7 @@ Run
 Large uploads require enough free disk space in this application's tmp folder for the original media and the extracted audio. Upload time depends on available disk speed.
 
 Google Colab
-1. Open [the Colab notebook](https://colab.research.google.com/github/Elaina117/Parakeet-SRT-Transcriber/blob/main/Parakeet_SRT_Transcriber_Colab.ipynb) and select a GPU runtime.
+1. Open [the Colab notebook](https://colab.research.google.com/github/Elaina117/Parakeet_SRT_Transcriber/blob/main/Parakeet_SRT_Transcriber_Colab.ipynb) and select a GPU runtime.
 2. Upload the media file (or the Windows-extracted MKA audio) through Colab's file manager into /content. Do not upload an application ZIP; the notebook clones the latest app code from this public GitHub repository and pulls updates every time the cell starts.
 3. Run the single code cell. On first run it installs the Linux/CUDA 12 dependencies, MOSS, and speech enhancement, then starts the app and displays its page. Re-running in the same live runtime overlays updated app files without deleting checkpoints/models, and skips installation when the setup fingerprint is unchanged. The cell remains active and checks the server every few minutes while the app is running; stop the cell to shut down the app. This does not override Colab runtime limits or forced disconnections.
 4. Enter a local media path such as `/content/movie.mp4` or `/content/movie.audio.mka` in the direct-processing field. Nothing uses or mounts Google Drive. App files, models, temporary audio, and checkpoints are deleted when the Colab runtime itself is discarded.
